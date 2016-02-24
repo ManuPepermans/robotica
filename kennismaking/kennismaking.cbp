@@ -1,0 +1,111 @@
+t request IRQ %d: err=%d\n", g_pPciDev->irq, rc));
+        return rc;
+    }
+    return 0;
+}
+
+
+/**
+ * Deregisters the ISR.
+ */
+static void vboxguestLinuxTermISR(void)
+{
+    free_irq(g_pPciDev->irq, &g_DevExt);
+}
+
+
+enum
+{
+    /** The minumum value our device can return */
+    RANGE_MIN = 0,
+    /** The maximum value our device can return */
+    RANGE_MAX = 0xFFFF
+};
+
+
+#ifdef VBOXGUEST_WITH_INPUT_DRIVER
+/** Calls the kernel IOCtl to report mouse status to the host on behalf of
+ * our kernel session. */
+static int vboxguestLinuxSetMouseStatus(uint32_t fStatus)
+{
+    return VBoxGuestCommonIOCtl(VBOXGUEST_IOCTL_SET_MOUSE_STATUS, &g_DevExt,
+                                g_pKernelSession, &fStatus, sizeof(fStatus),
+                                NULL);
+}
+
+
+/** Called when the input device is first opened.  Sets up absolute reporting.
+ */
+static int vboxguestOpenInputDevice(struct input_dev *pDev)
+{
+    NOREF(pDev);
+    if (RT_FAILURE(vboxguestLinuxSetMouseStatus
+                                   (  VMMDEV_MOUSE_GUEST_CAN_ABSOLUTE
+                                    | VMMDEV_MOUSE_NEW_PROTOCOL)))
+        return ENODEV;
+    return 0;
+}
+
+
+/** Called if all open handles to the device are closed, disables absolute
+ * reporting. */
+static void vboxguestCloseInputDevice(struct input_dev *pDev)
+{
+    NOREF(pDev);
+    vboxguestLinuxSetMouseStatus(0);
+}
+
+
+/**
+ * Creates the kernel input device.
+ */
+static int __init vboxguestLinuxCreateInputDevice(void)
+{
+    int rc;
+
+    rc = VbglGRAlloc((VMMDevRequestHeader **)&g_pMouseStatusReq,
+                     sizeof(*g_pMouseStatusReq),
+                     VMMDevReq_GetMouseStatus);
+    if (RT_FAILURE(rc))
+        return -ENOMEM;
+    g_pInputDevice = input_allocate_device();
+    if (!g_pInputDevice)
+    {
+        VbglGRFree(&g_pMouseStatusReq->header);
+        return -ENOMEM;
+    }
+    g_pInputDevice->id.bustype = BUS_PCI;
+    g_pInputDevice->id.vendor  = VMMDEV_VENDORID;
+    g_pInputDevice->id.product = VMMDEV_DEVICEID;
+    g_pInputDevice->id.version = VBOX_SHORT_VERSION;
+    g_pInputDevice->open       = vboxguestOpenInputDevice;
+    g_pInputDevice->close      = vboxguestCloseInputDevice;
+#if 0  /* The device registration code was not backported */
+# if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 22)
+    g_pInputDevice->cdev.dev   = &g_pPciDev->dev;
+# else
+    g_pInputDevice->dev.parent = &g_pPciDev->dev;
+# endif
+#endif
+    {
+        int rc = input_register_device(g_pInputDevice);
+        if (rc)
+        {
+            VbglGRFree(&g_pMouseStatusReq->header);
+            input_free_device(g_pInputDevice);
+            return rc;
+        }
+    }
+    /* Do what one of our competitors apparently does as that works. */
+    ASMBitSet(g_pInputDevice->evbit, EV_ABS);
+    ASMBitSet(g_pInputDevice->evbit, EV_KEY);
+# ifdef EV_SYN
+    ASMBitSet(g_pInputDevice->evbit, EV_SYN);
+# endif
+    input_set_abs_params(g_pInputDevice, ABS_X, RANGE_MIN, RANGE_MAX, 0, 0);
+    input_set_abs_params(g_pInputDevice, ABS_Y, RANGE_MIN, RANGE_MAX, 0, 0);
+    ASMBitSet(g_pInputDevice->keybit, BTN_MOUSE);
+    /** @todo this string should be in a header file somewhere. */
+    g_pInputDevice->name = "VirtualBox mouse integration";
+    return 0;
+}

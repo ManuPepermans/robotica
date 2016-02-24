@@ -1,0 +1,12 @@
+ @todo This need quite some more work! */
+    enum
+    {
+        kLevel_Invalid, kLevel_NoOne, kLevel_OnlyVBoxGuest, kLevel_OnlyKernel, kLevel_TrustedUsers, kLevel_AllUsers
+    } enmRequired;
+    switch (enmType)
+    {
+        /*
+         * Deny access to anything we don't know or provide specialized I/O controls for.
+         */
+#ifdef VBOX_WITH_HGCM
+        case VMM
